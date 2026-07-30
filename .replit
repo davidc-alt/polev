@@ -1,0 +1,13 @@
+run = "npm run build && node server.js"
+entrypoint = "server.js"
+hidden = [".config", "package-lock.json"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "npm run build && node server.js"]
+
+[[ports]]
+localPort = 3001
+externalPort = 80
