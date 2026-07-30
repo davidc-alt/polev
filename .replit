@@ -1,9 +1,10 @@
 run = "npm run build && node server.js"
 entrypoint = "server.js"
 hidden = [".config", "package-lock.json"]
+modules = ["nodejs-20", "web", "nix"]
 
 [nix]
-channel = "stable-24_05"
+channel = "stable-25_05"
 
 [deployment]
 run = ["sh", "-c", "npm run build && node server.js"]
