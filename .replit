@@ -8,7 +8,28 @@ channel = "stable-25_05"
 
 [deployment]
 run = ["sh", "-c", "npm run build && node server.js"]
+deploymentTarget = "cloudrun"
 
 [[ports]]
 localPort = 3001
 externalPort = 80
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start app"
+
+[[workflows.workflow]]
+name = "Start app"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run build && node server.js"
