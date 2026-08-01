@@ -12,6 +12,7 @@ export default function App() {
     isMonitoring: false,
     isAutoVoting: true,
     targetUrl: 'https://pollev.com/demouser',
+    screenName: 'David Bondarescu',
     intervalSeconds: 30,
     strategy: 'random',
     optionIndex: 0,
@@ -168,6 +169,10 @@ export default function App() {
     handleUpdateConfig({ targetUrl: newUrl });
   };
 
+  const handleNameChange = (newName) => {
+    handleUpdateConfig({ screenName: newName });
+  };
+
   const handleClearLogs = async () => {
     try {
       await fetch('/api/logs/clear', { method: 'POST' });
@@ -189,6 +194,7 @@ export default function App() {
         setTargetInput={setTargetInput}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onNameChange={handleNameChange}
       />
 
       {/* Main Tab Views */}
@@ -244,7 +250,7 @@ export default function App() {
           poll.core • Gemini AI Auto-Responder Engine (30s Polling Cycle)
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          Crafted by <strong style={{ color: 'var(--text-main)' }}>david bondarescu</strong>
+          Registered to <strong style={{ color: 'var(--text-main)' }}>{state.screenName || 'David Bondarescu'}</strong>
         </div>
       </footer>
 

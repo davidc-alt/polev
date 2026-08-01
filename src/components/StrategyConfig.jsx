@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sliders, Dices, ArrowUpRight, Hash, Sparkles, Eye, EyeOff, Power, Key, CheckCircle2 } from 'lucide-react';
+import { Sliders, Dices, ArrowUpRight, Hash, Sparkles, Eye, EyeOff, Power, Key, CheckCircle2, User } from 'lucide-react';
 
 export default function StrategyConfig({ state, onUpdateConfig }) {
   const [showApiKey, setShowApiKey] = useState(false);
@@ -15,10 +15,10 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div>
           <h2 style={{ fontSize: '1.1rem', fontWeight: '800', color: 'var(--text-main)' }}>
-            Automation Strategy & Interval
+            Automation Strategy & Participant Profile
           </h2>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Configure how Poll Everywhere options are selected every 30 seconds
+            Configure your registered name and how Poll Everywhere options are selected every 30s
           </p>
         </div>
 
@@ -139,7 +139,7 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
 
           </div>
 
-          {/* Sub-control 1: Target Choice Index (ONLY shows when 'index' strategy selected) */}
+          {/* Sub-control 1: Target Choice Index */}
           {state.strategy === 'index' && (
             <div style={{ marginTop: '1rem', background: '#ffffff', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '1rem' }}>
               <label style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-main)' }}>Target Option Index:</label>
@@ -157,7 +157,7 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
             </div>
           )}
 
-          {/* Sub-control 2: Gemini API Key Box (ONLY pops up when 'ai' strategy is selected) */}
+          {/* Sub-control 2: Gemini API Key Box (pops up when 'ai' strategy is selected) */}
           {state.strategy === 'ai' && (
             <div style={{
               marginTop: '1rem',
@@ -165,8 +165,7 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
               border: '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-md)',
               padding: '1.1rem',
-              boxShadow: 'var(--shadow-sm)',
-              animation: 'fadeIn 0.2s ease-in-out'
+              boxShadow: 'var(--shadow-sm)'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                 <label style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -210,17 +209,35 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
                   {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.5rem', lineHeight: '1.4' }}>
-                Gemini AI will automatically evaluate each Poll Everywhere question and pick the most accurate answer option every 30s.
-              </p>
             </div>
           )}
 
         </div>
 
-        {/* Polling Interval Slider & Presets */}
+        {/* Participant Name & Polling Controls */}
         <div>
+          {/* Participant Name Box */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              REGISTERED PARTICIPANT NAME
+            </label>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                className="input-minimal"
+                placeholder="e.g. David Bondarescu"
+                value={state.screenName || ''}
+                onChange={(e) => onUpdateConfig({ screenName: e.target.value })}
+                style={{ paddingLeft: '2.2rem', background: '#ffffff' }}
+              />
+              <User size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+              This name will be automatically registered whenever Poll Everywhere prompts for participant name.
+            </p>
+          </div>
+
+          {/* Scan Interval Slider */}
           <div style={{ marginBottom: '1.25rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <label style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -262,11 +279,6 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
                 cursor: 'pointer'
               }}
             />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '0.3rem' }}>
-              <span>5 sec</span>
-              <span>30 sec (Standard requested)</span>
-              <span>120 sec</span>
-            </div>
           </div>
 
           {/* Browser Window Mode */}

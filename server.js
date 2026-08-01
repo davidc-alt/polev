@@ -15,6 +15,7 @@ let state = {
   isMonitoring: false,
   isAutoVoting: true,
   targetUrl: 'https://pollev.com/demouser',
+  screenName: 'David Bondarescu',
   intervalSeconds: 30,
   strategy: 'random', // 'random' | 'first' | 'index' | 'ai'
   optionIndex: 0,
@@ -146,7 +147,6 @@ async function scanAndVote() {
         '--window-size=1280,800'
       ];
 
-      // Replit & Nix chromium executable path support
       const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
 
       browser = await puppeteer.launch({
@@ -172,6 +172,51 @@ async function scanAndVote() {
         await new Promise(r => setTimeout(r, 1500));
       } catch (err) {
         addLog('warn', `Reload timeout, checking existing page DOM.`);
+      }
+    }
+
+    // Auto-fill Screen / Participant Name if Poll Everywhere prompts for registration
+    if (state.screenName) {
+      const nameFilled = await page.evaluate((nameToSet) => {
+        const nameSelectors = [
+          'input[data-test-id*="screen-name"]',
+          'input[name="screen_name"]',
+          'input[name*="screen_name"]',
+          'input[placeholder*="name" i]',
+          'input[placeholder*="Name"]',
+          '.component-screen-name-input',
+          '#screen_name'
+        ];
+        let inputEl = null;
+        for (const sel of nameSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+            inputEl = el;
+            break;
+          }
+        }
+
+        if (inputEl && inputEl.value !== nameToSet) {
+          inputEl.value = nameToSet;
+          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+          const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+          const submitBtn = btns.find(b => {
+            const txt = (b.innerText || b.value || '').toLowerCase();
+            return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done');
+          });
+          if (submitBtn) {
+            submitBtn.click();
+            return true;
+          }
+        }
+        return false;
+      }, state.screenName);
+
+      if (nameFilled) {
+        addLog('info', `Registered participant name on Poll Everywhere: "${state.screenName}"`);
+        await new Promise(r => setTimeout(r, 1000));
       }
     }
 
@@ -220,7 +265,7 @@ async function scanAndVote() {
       if (rawOptions.length === 0) {
         const responseContainer = document.querySelector('.component-response, .pe-response-body, main');
         if (responseContainer) {
-          rawOptions = Array.from(responseContainer.querySelectorAll('button')).filter(btn => {
+          rawOptions = Array.from(document.querySelectorAll('button')).filter(btn => {
             const txt = btn.innerText || '';
             return txt.trim().length > 0 && !txt.toLowerCase().includes('submit') && !txt.toLowerCase().includes('clear');
           });
@@ -364,6 +409,7 @@ async function scanAndVote() {
       isMonitoring: state.isMonitoring,
       isAutoVoting: state.isAutoVoting,
       targetUrl: state.targetUrl,
+      screenName: state.screenName,
       intervalSeconds: state.intervalSeconds,
       strategy: state.strategy,
       optionIndex: state.optionIndex,
@@ -415,11 +461,12 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.post('/api/config', async (req, res) => {
-  const { targetUrl, intervalSeconds, strategy, optionIndex, geminiApiKey, isAutoVoting, headful } = req.body;
+  const { targetUrl, screenName, intervalSeconds, strategy, optionIndex, geminiApiKey, isAutoVoting, headful } = req.body;
   
   let resetBrowser = false;
 
   if (targetUrl !== undefined) state.targetUrl = targetUrl;
+  if (screenName !== undefined) state.screenName = screenName;
   if (intervalSeconds !== undefined) {
     state.intervalSeconds = Math.max(5, parseInt(intervalSeconds) || 30);
     if (state.isMonitoring) {
@@ -437,7 +484,7 @@ app.post('/api/config', async (req, res) => {
     resetBrowser = true;
   }
 
-  addLog('info', `Configuration updated: Interval=${state.intervalSeconds}s, Strategy=${state.strategy.toUpperCase()}`);
+  addLog('info', `Configuration updated: Name="${state.screenName}", Interval=${state.intervalSeconds}s, Strategy=${state.strategy.toUpperCase()}`);
 
   if (resetBrowser && browser) {
     try {
@@ -531,7 +578,6 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
-// Serve static production build of Vite (for 1-click Replit / Render / Railway deployment)
 const distPath = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));

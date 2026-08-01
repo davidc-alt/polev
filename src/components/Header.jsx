@@ -1,5 +1,5 @@
-import React from 'react';
-import { Play, Pause, RefreshCw, Zap, ExternalLink, Activity, Sparkles, Layers } from 'lucide-react';
+import React, { useState } from 'react';
+import { Play, Pause, RefreshCw, Zap, ExternalLink, User, Check, Edit2 } from 'lucide-react';
 
 export default function Header({ 
   state, 
@@ -10,8 +10,28 @@ export default function Header({
   targetInput, 
   setTargetInput, 
   activeTab,
-  setActiveTab
+  setActiveTab,
+  onNameChange
 }) {
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(state.screenName || 'David Bondarescu');
+
+  // Compute initials (e.g. "David Bondarescu" -> "DB")
+  const getInitials = (name) => {
+    if (!name) return 'PE';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return name.substring(0, 2).toUpperCase();
+  };
+
+  const handleSaveName = (e) => {
+    if (e) e.preventDefault();
+    onNameChange(nameInput);
+    setEditingName(false);
+  };
+
   return (
     <header style={{ marginBottom: '2rem' }}>
       
@@ -73,12 +93,35 @@ export default function Header({
           </button>
         </div>
 
-        {/* Top Right: Author Credit Badge ("by david bondarescu") */}
+        {/* Top Right: Custom Name Credit Badge & Edit Button */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div className="credit-badge">
-            <div className="credit-avatar">DB</div>
-            <span>by <strong>david bondarescu</strong></span>
-          </div>
+          {editingName ? (
+            <form onSubmit={handleSaveName} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <input
+                type="text"
+                className="input-minimal"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="Enter your name"
+                autoFocus
+                style={{ padding: '0.35rem 0.85rem', fontSize: '0.85rem', width: '160px' }}
+              />
+              <button type="submit" className="btn-dark" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
+                <Check size={14} /> Save
+              </button>
+            </form>
+          ) : (
+            <div 
+              className="credit-badge" 
+              onClick={() => { setNameInput(state.screenName || ''); setEditingName(true); }}
+              style={{ cursor: 'pointer' }}
+              title="Click to edit your name"
+            >
+              <div className="credit-avatar">{getInitials(state.screenName)}</div>
+              <span>by <strong>{state.screenName || 'David Bondarescu'}</strong></span>
+              <Edit2 size={12} style={{ opacity: 0.6, marginLeft: '0.2rem' }} />
+            </div>
+          )}
 
           <button 
             onClick={onManualScan}
@@ -116,17 +159,33 @@ export default function Header({
             )}
           </div>
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Automatically scans Poll Everywhere every {state.intervalSeconds}s and clicks your response
+            Automates Poll Everywhere responses for <strong>{state.screenName || 'David Bondarescu'}</strong> every {state.intervalSeconds}s
           </p>
         </div>
 
-        {/* Target URL Form & Monitor Trigger */}
+        {/* Target URL & Participant Name Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          
+          {/* Participant Name Input */}
+          <div style={{ position: 'relative', width: '180px' }}>
+            <input
+              type="text"
+              className="input-minimal"
+              placeholder="Your Name"
+              value={state.screenName || ''}
+              onChange={(e) => onNameChange(e.target.value)}
+              style={{ paddingLeft: '2rem' }}
+              title="Poll Everywhere Registered Name"
+            />
+            <User size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          </div>
+
+          {/* Target URL Input */}
           <form 
             onSubmit={(e) => { e.preventDefault(); onUrlChange(targetInput); }}
             style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}
           >
-            <div style={{ position: 'relative', width: '260px' }}>
+            <div style={{ position: 'relative', width: '240px' }}>
               <input
                 type="text"
                 className="input-minimal"
