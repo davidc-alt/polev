@@ -16,7 +16,6 @@ export default function Header({
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(state.screenName || 'David Bondarescu');
 
-  // Compute initials (e.g. "David Bondarescu" -> "DB")
   const getInitials = (name) => {
     if (!name) return 'PE';
     const parts = name.trim().split(/\s+/);
@@ -30,6 +29,12 @@ export default function Header({
     if (e) e.preventDefault();
     onNameChange(nameInput);
     setEditingName(false);
+  };
+
+  const handleUrlInputChange = (e) => {
+    const val = e.target.value;
+    setTargetInput(val);
+    onUrlChange(val);
   };
 
   return (
@@ -59,7 +64,7 @@ export default function Header({
           }}>
             <Zap size={20} fill="#fff" />
           </div>
-          <span style={{ fontSize: '1.25rem', fontWeight: '800', tracking: '-0.03em', color: 'var(--text-main)' }}>
+          <span style={{ fontSize: '1.25rem', fontWeight: '800', letterSpacing: '-0.03em', color: 'var(--text-main)' }}>
             poll<span style={{ color: 'var(--accent-purple)' }}>core</span>
           </span>
         </div>
@@ -163,7 +168,7 @@ export default function Header({
           </p>
         </div>
 
-        {/* Target URL & Participant Name Controls */}
+        {/* Target URL & Participant Name Controls (Instant Auto-Set on Type/Paste) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           
           {/* Participant Name Input */}
@@ -180,34 +185,26 @@ export default function Header({
             <User size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           </div>
 
-          {/* Target URL Input */}
-          <form 
-            onSubmit={(e) => { e.preventDefault(); onUrlChange(targetInput); }}
-            style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}
-          >
-            <div style={{ position: 'relative', width: '240px' }}>
-              <input
-                type="text"
-                className="input-minimal"
-                placeholder="pollev.com/username"
-                value={targetInput}
-                onChange={(e) => setTargetInput(e.target.value)}
-                style={{ paddingRight: '2.2rem' }}
-              />
-              <a 
-                href={targetInput.startsWith('http') ? targetInput : `https://${targetInput}`}
-                target="_blank"
-                rel="noreferrer"
-                style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
-                title="Open in browser"
-              >
-                <ExternalLink size={15} />
-              </a>
-            </div>
-            <button type="submit" className="btn-outline-pill">
-              Set URL
-            </button>
-          </form>
+          {/* Instant Auto-Setting Target URL Input (No Redundant Button) */}
+          <div style={{ position: 'relative', width: '280px' }}>
+            <input
+              type="text"
+              className="input-minimal"
+              placeholder="pollev.com/username"
+              value={targetInput}
+              onChange={handleUrlInputChange}
+              style={{ paddingRight: '2.2rem' }}
+            />
+            <a 
+              href={targetInput.startsWith('http') ? targetInput : `https://${targetInput}`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+              title="Open in browser"
+            >
+              <ExternalLink size={15} />
+            </a>
+          </div>
 
           {state.isMonitoring ? (
             <button onClick={onStop} className="btn-danger-minimal">
