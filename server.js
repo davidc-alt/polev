@@ -155,16 +155,28 @@ async function scanAndVote() {
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
         '--window-size=1280,800'
       ];
 
       const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
 
-      browser = await puppeteer.launch({
-        headless: !state.headful,
-        executablePath: executablePath || undefined,
-        args: launchArgs
-      });
+      try {
+        browser = await puppeteer.launch({
+          headless: !state.headful,
+          executablePath: executablePath || undefined,
+          args: launchArgs
+        });
+      } catch (launchErr) {
+        addLog('warn', `Standard browser launch failed: ${launchErr.message}. Retrying with default executable...`);
+        browser = await puppeteer.launch({
+          headless: true,
+          args: launchArgs
+        });
+      }
+
       page = await browser.newPage();
       await page.setViewport({ width: 1280, height: 800 });
       await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');

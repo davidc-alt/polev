@@ -8,7 +8,7 @@
     "dev": "concurrently -k -n \"SERVER,VITE\" -c \"magenta.bold,cyan.bold\" \"node server.js\" \"vite\"",
     "server": "node server.js",
     "client": "vite",
-    "build": "vite build",
+    "build": "vite build && npx puppeteer browsers install chrome",
     "preview": "vite preview"
   },
   "dependencies": {
