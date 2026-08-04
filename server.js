@@ -283,6 +283,186 @@ async function getOrLaunchBrowser() {
   return browser;
 }
 
+async function autoSyncProfileAndLogin(page, state) {
+  const { screenName, participantEmail, participantPassword } = state;
+  if (!screenName && !participantEmail) return;
+
+  const setInputValue = async (frame, selector, value) => {
+    return frame.evaluate(({ sel, val }) => {
+      const el = document.querySelector(sel);
+      if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+      
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set ||
+                           Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(el, val);
+      } else {
+        el.value = val;
+      }
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }, { sel: selector, val: value });
+  };
+
+  const frames = [page.mainFrame(), ...page.frames().filter(f => f !== page.mainFrame())];
+
+  for (const frame of frames) {
+    try {
+      // 1. Check if input for Screen Name, Email, or Password is ALREADY visible
+      const hasOpenInput = await frame.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input')).filter(i => i.offsetWidth > 0 && i.offsetHeight > 0);
+        return inputs.some(i => {
+          const type = (i.type || '').toLowerCase();
+          const name = (i.name || '').toLowerCase();
+          const placeholder = (i.placeholder || '').toLowerCase();
+          const testId = (i.getAttribute('data-test-id') || '').toLowerCase();
+          return type === 'email' || type === 'password' || name.includes('name') || name.includes('email') || name.includes('password') || placeholder.includes('name') || placeholder.includes('email') || testId.includes('name') || testId.includes('email');
+        });
+      });
+
+      if (hasOpenInput) {
+        let filledName = false;
+        let filledEmail = false;
+        let filledPass = false;
+
+        if (screenName) {
+          const nameSel = 'input[data-test-id*="screen-name"], input[name="screen_name"], input[name*="screen_name"], input[placeholder*="name" i], input[placeholder*="Name"], .component-screen-name-input, #screen_name, input[id*="screen_name"]';
+          filledName = await setInputValue(frame, nameSel, screenName);
+        }
+
+        if (participantEmail) {
+          const emailSel = 'input[type="email"], input[name="email"], input[name*="email"], input[placeholder*="email" i], input[data-test-id*="email"], #email';
+          filledEmail = await setInputValue(frame, emailSel, participantEmail);
+        }
+
+        if (participantPassword) {
+          const passSel = 'input[type="password"], input[name="password"], input[name*="password"], input[placeholder*="password" i], #password';
+          filledPass = await setInputValue(frame, passSel, participantPassword);
+        }
+
+        if (filledName || filledEmail || filledPass) {
+          const submitClicked = await frame.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(b => b.offsetWidth > 0);
+            const submitBtn = btns.find(b => {
+              const txt = (b.innerText || b.value || '').toLowerCase().trim();
+              return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('log in') || txt.includes('sign in');
+            });
+            if (submitBtn) {
+              submitBtn.click();
+              return true;
+            }
+            return false;
+          });
+
+          if (submitClicked) {
+            addLog('info', `Submitted profile info on Poll Everywhere: Name="${screenName || 'N/A'}", Email="${participantEmail || 'N/A'}"`);
+            await new Promise(r => setTimeout(r, 1500));
+            return;
+          }
+        }
+      }
+
+      // 2. If NO input is open, search for "Responding as [CurrentName]" or pencil ✏️ icon, or "Guest" menu!
+      const clickAction = await frame.evaluate(({ targetName, targetEmail }) => {
+        const clean = s => (s || '').trim().toLowerCase();
+
+        const allEls = Array.from(document.querySelectorAll('*')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+
+        // Find "Responding as..." text anywhere in DOM
+        const respondingAsEl = allEls.find(el => {
+          const txt = (el.innerText || el.textContent || '').trim();
+          return txt.toLowerCase().includes('responding as') && el.children.length < 8;
+        });
+
+        if (respondingAsEl) {
+          const fullText = respondingAsEl.innerText || respondingAsEl.textContent || '';
+          const currentName = fullText.replace(/responding as/gi, '').trim();
+
+          if (targetName && clean(currentName) !== clean(targetName)) {
+            const editBtn = respondingAsEl.querySelector('button, svg, path, a, i, [role="button"]') || respondingAsEl;
+            
+            editBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            editBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            editBtn.click();
+            return { type: 'clicked_pencil', currentName };
+          }
+        }
+
+        // Try searching for top left "Guest" button / menu
+        if (targetEmail || targetName) {
+          const guestEl = allEls.find(el => {
+            const txt = (el.innerText || '').trim();
+            return (txt === 'Guest' || txt.startsWith('Guest ')) && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.classList.contains('component-header') || el.classList.contains('user-menu'));
+          });
+
+          if (guestEl) {
+            guestEl.click();
+            return { type: 'clicked_guest' };
+          }
+
+          const loginBtn = allEls.find(el => {
+            const txt = clean(el.innerText || '');
+            return (txt === 'log in' || txt === 'login' || txt === 'sign in' || txt.includes('log in to')) && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button');
+          });
+
+          if (loginBtn) {
+            loginBtn.click();
+            return { type: 'clicked_login' };
+          }
+        }
+
+        return { type: 'none' };
+      }, { targetName: screenName, targetEmail: participantEmail });
+
+      if (clickAction.type === 'clicked_pencil' || clickAction.type === 'clicked_guest' || clickAction.type === 'clicked_login') {
+        addLog('info', clickAction.type === 'clicked_pencil' 
+          ? `Detected screen name "${clickAction.currentName}" on Poll Everywhere. Clicking pencil ✏️ edit icon to set name to "${screenName}"...` 
+          : `Clicking ${clickAction.type === 'clicked_guest' ? 'Guest menu' : 'Log In link'} on Poll Everywhere...`);
+
+        await new Promise(r => setTimeout(r, 1200));
+
+        let filledName = false;
+        let filledEmail = false;
+        let filledPass = false;
+
+        if (screenName) {
+          const nameSel = 'input[data-test-id*="screen-name"], input[name="screen_name"], input[name*="screen_name"], input[placeholder*="name" i], input[placeholder*="Name"], .component-screen-name-input, #screen_name, input[id*="screen_name"]';
+          filledName = await setInputValue(frame, nameSel, screenName);
+        }
+
+        if (participantEmail) {
+          const emailSel = 'input[type="email"], input[name="email"], input[name*="email"], input[placeholder*="email" i], input[data-test-id*="email"], #email';
+          filledEmail = await setInputValue(frame, emailSel, participantEmail);
+        }
+
+        if (participantPassword) {
+          const passSel = 'input[type="password"], input[name="password"], input[name*="password"], input[placeholder*="password" i], #password';
+          filledPass = await setInputValue(frame, passSel, participantPassword);
+        }
+
+        if (filledName || filledEmail || filledPass) {
+          await frame.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(b => b.offsetWidth > 0);
+            const submitBtn = btns.find(b => {
+              const txt = (b.innerText || b.value || '').toLowerCase().trim();
+              return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('log in') || txt.includes('sign in');
+            });
+            if (submitBtn) submitBtn.click();
+          });
+
+          addLog('success', `Successfully updated Poll Everywhere profile to Name="${screenName || 'N/A'}", Email="${participantEmail || 'N/A'}"`);
+          await new Promise(r => setTimeout(r, 1500));
+          return;
+        }
+      }
+    } catch (err) {
+      console.error('Frame autoSync error:', err.message);
+    }
+  }
+}
+
 async function scanAndVote() {
   state.stats.checksPerformed++;
   state.stats.lastCheckTime = new Date().toISOString();
@@ -326,187 +506,7 @@ async function scanAndVote() {
     }
 
     // Auto-fill Screen Name & Email Address (with pencil icon ✏️ click & login flow support)
-    if (state.screenName || state.participantEmail) {
-      try {
-        const pass1 = await page.evaluate(({ nameToSet, emailToSet, passToSet }) => {
-          const clean = (s) => (s || '').trim().toLowerCase();
-
-          // 1. Check for open input fields directly
-          const nameSelectors = [
-            'input[data-test-id*="screen-name"]',
-            'input[name="screen_name"]',
-            'input[name*="screen_name"]',
-            'input[placeholder*="name" i]',
-            'input[placeholder*="Name"]',
-            '.component-screen-name-input',
-            '#screen_name',
-            'input[id*="screen_name"]',
-            'input[id*="participant_name"]'
-          ];
-          let nameInput = null;
-          for (const sel of nameSelectors) {
-            const el = document.querySelector(sel);
-            if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
-              nameInput = el;
-              break;
-            }
-          }
-
-          const emailSelectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            'input[name*="email"]',
-            'input[placeholder*="email" i]',
-            'input[placeholder*="Email"]',
-            'input[data-test-id*="email"]',
-            'input[id*="email"]',
-            '#email',
-            '#user_email'
-          ];
-          let emailInput = null;
-          for (const sel of emailSelectors) {
-            const el = document.querySelector(sel);
-            if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
-              emailInput = el;
-              break;
-            }
-          }
-
-          const passSelectors = [
-            'input[type="password"]',
-            'input[name="password"]',
-            'input[name*="password"]',
-            'input[placeholder*="password" i]',
-            '#password'
-          ];
-          let passInput = null;
-          for (const sel of passSelectors) {
-            const el = document.querySelector(sel);
-            if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
-              passInput = el;
-              break;
-            }
-          }
-
-          let filled = false;
-
-          if (nameInput && nameToSet && nameInput.value !== nameToSet) {
-            nameInput.value = nameToSet;
-            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
-            nameInput.dispatchEvent(new Event('change', { bubbles: true }));
-            filled = true;
-          }
-
-          if (emailInput && emailToSet && emailInput.value !== emailToSet) {
-            emailInput.value = emailToSet;
-            emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-            emailInput.dispatchEvent(new Event('change', { bubbles: true }));
-            filled = true;
-          }
-
-          if (passInput && passToSet && passInput.value !== passToSet) {
-            passInput.value = passToSet;
-            passInput.dispatchEvent(new Event('input', { bubbles: true }));
-            passInput.dispatchEvent(new Event('change', { bubbles: true }));
-            filled = true;
-          }
-
-          if (filled) {
-            const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
-            const submitBtn = btns.find(b => {
-              const txt = clean(b.innerText || b.value || '');
-              return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('log in') || txt.includes('sign in');
-            });
-            if (submitBtn) submitBtn.click();
-            return { action: 'filled' };
-          }
-
-          // 2. Check for "Responding as [Current Name]" badge and pencil ✏️ edit icon
-          const allEls = Array.from(document.querySelectorAll('*'));
-          const respondingAsEl = allEls.find(el => {
-            const txt = (el.innerText || '').trim();
-            return txt.toLowerCase().includes('responding as') && el.children.length < 6 && el.offsetWidth > 0;
-          });
-
-          if (respondingAsEl && nameToSet) {
-            const fullText = respondingAsEl.innerText || '';
-            const currentName = fullText.replace(/responding as/gi, '').trim();
-
-            if (clean(currentName) !== clean(nameToSet)) {
-              const editTarget = respondingAsEl.querySelector('button, svg, a, [role="button"]') || respondingAsEl;
-              editTarget.click();
-              return { action: 'clicked_pencil', currentName };
-            }
-          }
-
-          // 3. Check for Log In button if email is set
-          if (emailToSet) {
-            const loginLinks = Array.from(document.querySelectorAll('a, button, [role="button"]')).filter(el => {
-              const txt = clean(el.innerText || '');
-              return (txt === 'log in' || txt === 'login' || txt === 'sign in' || txt.includes('log in to')) && el.offsetWidth > 0;
-            });
-            if (loginLinks.length > 0) {
-              loginLinks[0].click();
-              return { action: 'clicked_login' };
-            }
-          }
-
-          return { action: 'none' };
-        }, { nameToSet: state.screenName, emailToSet: state.participantEmail, passToSet: state.participantPassword });
-
-        if (pass1.action === 'clicked_pencil' || pass1.action === 'clicked_login') {
-          addLog('info', pass1.action === 'clicked_pencil' 
-            ? `Detected screen name "${pass1.currentName}". Clicked pencil ✏️ icon to update name to "${state.screenName}"...` 
-            : `Clicking Log In link on Poll Everywhere...`);
-
-          await new Promise(r => setTimeout(r, 1000));
-
-          await page.evaluate(({ nameToSet, emailToSet, passToSet }) => {
-            const clean = (s) => (s || '').trim().toLowerCase();
-
-            const nameInput = document.querySelector('input[data-test-id*="screen-name"], input[name="screen_name"], input[name*="screen_name"], input[placeholder*="name" i], #screen_name');
-            const emailInput = document.querySelector('input[type="email"], input[name="email"], input[name*="email"], input[placeholder*="email" i], #email');
-            const passInput = document.querySelector('input[type="password"], input[name="password"], input[name*="password"], #password');
-
-            let done = false;
-            if (nameInput && nameToSet) {
-              nameInput.value = nameToSet;
-              nameInput.dispatchEvent(new Event('input', { bubbles: true }));
-              nameInput.dispatchEvent(new Event('change', { bubbles: true }));
-              done = true;
-            }
-            if (emailInput && emailToSet) {
-              emailInput.value = emailToSet;
-              emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-              emailInput.dispatchEvent(new Event('change', { bubbles: true }));
-              done = true;
-            }
-            if (passInput && passToSet) {
-              passInput.value = passToSet;
-              passInput.dispatchEvent(new Event('input', { bubbles: true }));
-              passInput.dispatchEvent(new Event('change', { bubbles: true }));
-              done = true;
-            }
-
-            if (done) {
-              const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
-              const submitBtn = btns.find(b => {
-                const txt = clean(b.innerText || b.value || '');
-                return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('log in') || txt.includes('sign in');
-              });
-              if (submitBtn) submitBtn.click();
-            }
-          }, { nameToSet: state.screenName, emailToSet: state.participantEmail, passToSet: state.participantPassword });
-
-          await new Promise(r => setTimeout(r, 1200));
-        } else if (pass1.action === 'filled') {
-          addLog('info', `Profile synced: Name="${state.screenName || 'N/A'}", Email="${state.participantEmail || 'N/A'}"`);
-          await new Promise(r => setTimeout(r, 1000));
-        }
-      } catch (e) {
-        console.error('Profile sync error:', e.message);
-      }
-    }
+    await autoSyncProfileAndLogin(page, state);
 
     let screenshotBase64 = null;
     try {
