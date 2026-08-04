@@ -285,14 +285,99 @@ async function getOrLaunchBrowser() {
 
 async function autoSyncProfileAndLogin(page, state) {
   const { screenName, participantEmail, participantPassword } = state;
-  if (!screenName && !participantEmail) return;
   if (!page || page.isClosed()) return;
 
-  const setInputValueAndSubmit = async (frame, nameVal, emailVal, passVal) => {
-    return frame.evaluate(({ nameVal, emailVal, passVal }) => {
+  const updateScreenshot = async () => {
+    try {
+      const screenshotBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 60 });
+      state.lastScreenshot = `data:image/jpeg;base64,${screenshotBase64}`;
+      broadcastSSE({ type: 'stateUpdate', state });
+    } catch (e) {}
+  };
+
+  const frames = [page.mainFrame(), ...page.frames().filter(f => f !== page.mainFrame())];
+
+  // 1. Check if page is currently stuck on a Sign In screen/modal
+  const isSignInPage = await page.evaluate(() => {
+    const hasEmailField = document.querySelector('input[type="email"], input[name*="email"], input[placeholder*="email" i], #email') !== null;
+    const hasSignInHeading = Array.from(document.querySelectorAll('h1, h2, h3, div, p')).some(el => {
+      const t = (el.innerText || '').trim().toLowerCase();
+      return (t === 'sign in' || t === 'log in' || t === 'log in to poll everywhere' || t === 'sign in to poll everywhere') && el.offsetWidth > 0;
+    });
+    return hasEmailField && hasSignInHeading;
+  });
+
+  if (isSignInPage) {
+    if (!participantEmail) {
+      addLog('warn', `Detected Sign-in page but no Account Email configured. Navigating back to poll target: ${state.targetUrl}...`);
+      const formattedTarget = formatUrl(state.targetUrl);
+      await page.goto(formattedTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      lastNavigatedUrl = formattedTarget;
+      await new Promise(r => setTimeout(r, 1000));
+      await updateScreenshot();
+      return;
+    } else {
+      // Step 1: Submit Email
+      const filledEmail = await page.evaluate(({ emailVal }) => {
+        const emailInput = document.querySelector('input[type="email"], input[name*="email"], input[placeholder*="email" i], #email');
+        if (!emailInput || emailInput.offsetWidth === 0) return false;
+        emailInput.focus();
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSetter) nativeSetter.call(emailInput, emailVal); else emailInput.value = emailVal;
+        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+        emailInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+        const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(b => b.offsetWidth > 0);
+        const continueBtn = btns.find(b => {
+          const t = (b.innerText || b.value || '').toLowerCase().trim();
+          return t === 'continue' || t === 'next' || t === 'log in' || t === 'sign in';
+        });
+        if (continueBtn) continueBtn.click();
+        return true;
+      }, { emailVal: participantEmail });
+
+      if (filledEmail) {
+        addLog('info', `Entered account email "${participantEmail}" on Sign In page. Waiting for password field...`);
+        await new Promise(r => setTimeout(r, 1800));
+      }
+
+      // Step 2: Submit Password
+      if (participantPassword) {
+        const filledPass = await page.evaluate(({ passVal }) => {
+          const passInput = document.querySelector('input[type="password"], input[name*="password"], #password');
+          if (!passInput || passInput.offsetWidth === 0) return false;
+          passInput.focus();
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(passInput, passVal); else passInput.value = passVal;
+          passInput.dispatchEvent(new Event('input', { bubbles: true }));
+          passInput.dispatchEvent(new Event('change', { bubbles: true }));
+          passInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+          const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(b => b.offsetWidth > 0);
+          const loginBtn = btns.find(b => {
+            const t = (b.innerText || b.value || '').toLowerCase().trim();
+            return t === 'log in' || t === 'sign in' || t === 'continue' || t === 'submit';
+          });
+          if (loginBtn) loginBtn.click();
+          return true;
+        }, { passVal: participantPassword });
+
+        if (filledPass) {
+          addLog('success', `Submitted password for "${participantEmail}". Waiting for session redirect...`);
+          await new Promise(r => setTimeout(r, 2500));
+          await updateScreenshot();
+          return;
+        }
+      }
+    }
+  }
+
+  // 2. Screen Name auto-sync & Guest menu handling
+  const setInputValueAndSubmit = async (frame, nameVal) => {
+    return frame.evaluate(({ nameVal }) => {
       const clean = s => (s || '').trim().toLowerCase();
 
-      // Find screen name input
       let nameInput = document.querySelector([
         'input[data-test-id*="screen-name"]',
         'input[name="screen_name"]',
@@ -311,98 +396,65 @@ async function autoSyncProfileAndLogin(page, state) {
         }
       }
 
-      const emailInput = document.querySelector('input[type="email"], input[name="email"], input[name*="email"], input[placeholder*="email" i], input[data-test-id*="email"], #email');
-      const passInput = document.querySelector('input[type="password"], input[name="password"], input[name*="password"], input[placeholder*="password" i], #password');
+      if (!nameInput || !nameVal) return false;
 
-      let setAny = false;
+      nameInput.focus();
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set ||
+                           Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(nameInput, nameVal);
+      } else {
+        nameInput.value = nameVal;
+      }
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+      nameInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      nameInput.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      nameInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      nameInput.dispatchEvent(new Event('blur', { bubbles: true }));
 
-      const fillElement = (el, val) => {
-        if (!el || !val) return false;
-        el.focus();
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set ||
-                             Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-        if (nativeSetter) {
-          nativeSetter.call(el, val);
-        } else {
-          el.value = val;
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-        return true;
-      };
+      const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(b => b.offsetWidth > 0);
+      const submitBtn = btns.find(b => {
+        const txt = clean(b.innerText || b.value || '');
+        return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('ok') || txt.includes('update');
+      });
 
-      if (nameVal && nameInput) setAny = fillElement(nameInput, nameVal) || setAny;
-      if (emailVal && emailInput) setAny = fillElement(emailInput, emailVal) || setAny;
-      if (passVal && passInput) setAny = fillElement(passInput, passVal) || setAny;
-
-      if (setAny) {
-        const btns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(b => b.offsetWidth > 0);
-        const submitBtn = btns.find(b => {
-          const txt = clean(b.innerText || b.value || '');
-          return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('log in') || txt.includes('sign in') || txt.includes('ok') || txt.includes('update');
-        });
-
-        if (submitBtn) {
-          submitBtn.click();
-        } else {
-          const parentForm = (nameInput || emailInput || passInput)?.closest('form');
-          if (parentForm) {
-            if (typeof parentForm.requestSubmit === 'function') {
-              parentForm.requestSubmit();
-            } else {
-              parentForm.submit();
-            }
-          }
+      if (submitBtn) {
+        submitBtn.click();
+      } else {
+        const parentForm = nameInput.closest('form');
+        if (parentForm) {
+          if (typeof parentForm.requestSubmit === 'function') parentForm.requestSubmit();
+          else parentForm.submit();
         }
       }
 
-      return setAny;
-    }, { nameVal, emailVal, passVal });
+      return true;
+    }, { nameVal });
   };
-
-  const updateScreenshot = async () => {
-    try {
-      const screenshotBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 60 });
-      state.lastScreenshot = `data:image/jpeg;base64,${screenshotBase64}`;
-      broadcastSSE({ type: 'stateUpdate', state });
-    } catch (e) {}
-  };
-
-  const frames = [page.mainFrame(), ...page.frames().filter(f => f !== page.mainFrame())];
 
   for (const frame of frames) {
     try {
-      // 1. Check if input for Screen Name, Email, or Password is ALREADY visible
-      const filledImmediate = await setInputValueAndSubmit(frame, screenName, participantEmail, participantPassword);
-      if (filledImmediate) {
-        addLog('info', `Submitted profile info on Poll Everywhere: Name="${screenName || 'N/A'}", Email="${participantEmail || 'N/A'}"`);
-        await new Promise(r => setTimeout(r, 1500));
-        await updateScreenshot();
-        return;
+      if (screenName) {
+        const filledImmediate = await setInputValueAndSubmit(frame, screenName);
+        if (filledImmediate) {
+          addLog('info', `Submitted screen name "${screenName}" on Poll Everywhere.`);
+          await new Promise(r => setTimeout(r, 1200));
+          await updateScreenshot();
+          return;
+        }
       }
 
-      // 2. Search for "Responding as [CurrentName]" badge or Login buttons
-      const clickAction = await frame.evaluate(({ targetName, targetEmail }) => {
+      const clickAction = await frame.evaluate(({ targetName, hasTargetEmail }) => {
         const clean = s => (s || '').trim().toLowerCase();
         const allEls = Array.from(document.querySelectorAll('*')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
 
-        // Find elements containing "responding as"
         const candidates = allEls.filter(el => {
           const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
           return txt.includes('responding as') && txt.length < 120;
         });
 
-        // Sort candidates by text length ASCENDING
-        candidates.sort((a, b) => {
-          const lenA = (a.innerText || a.textContent || '').length;
-          const lenB = (b.innerText || b.textContent || '').length;
-          return lenA - lenB;
-        });
-
+        candidates.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
         const respondingAsEl = candidates[0];
 
         if (respondingAsEl) {
@@ -418,12 +470,12 @@ async function autoSyncProfileAndLogin(page, state) {
           }
         }
 
-        if (targetEmail || targetName) {
+        // ONLY search for Guest menu / Log In link if hasTargetEmail is true!
+        if (hasTargetEmail) {
           const guestEl = allEls.find(el => {
             const txt = (el.innerText || '').trim();
             return (txt === 'Guest' || txt.startsWith('Guest ')) && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.classList.contains('component-header') || el.classList.contains('user-menu'));
           });
-
           if (guestEl) {
             guestEl.click();
             return { type: 'clicked_guest' };
@@ -433,7 +485,6 @@ async function autoSyncProfileAndLogin(page, state) {
             const txt = clean(el.innerText || '');
             return (txt === 'log in' || txt === 'login' || txt === 'sign in' || txt.includes('log in to')) && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button');
           });
-
           if (loginBtn) {
             loginBtn.click();
             return { type: 'clicked_login' };
@@ -441,24 +492,23 @@ async function autoSyncProfileAndLogin(page, state) {
         }
 
         return { type: 'none' };
-      }, { targetName: screenName, targetEmail: participantEmail });
+      }, { targetName: screenName, hasTargetEmail: Boolean(participantEmail) });
 
       if (clickAction.type === 'clicked_pencil' || clickAction.type === 'clicked_guest' || clickAction.type === 'clicked_login') {
         addLog('info', clickAction.type === 'clicked_pencil' 
-          ? `Detected screen name "${clickAction.currentName}" on Poll Everywhere. Clicking pencil ✏️ edit icon to set name to "${screenName}"...` 
+          ? `Detected screen name "${clickAction.currentName}". Clicking pencil ✏️ edit icon to set name to "${screenName}"...` 
           : `Clicking ${clickAction.type === 'clicked_guest' ? 'Guest menu' : 'Log In link'} on Poll Everywhere...`);
 
         await new Promise(r => setTimeout(r, 1000));
-
-        let filledPostClick = await setInputValueAndSubmit(frame, screenName, participantEmail, participantPassword);
+        let filledPostClick = await setInputValueAndSubmit(frame, screenName);
         if (!filledPostClick) {
           await new Promise(r => setTimeout(r, 1000));
-          filledPostClick = await setInputValueAndSubmit(frame, screenName, participantEmail, participantPassword);
+          filledPostClick = await setInputValueAndSubmit(frame, screenName);
         }
 
         if (filledPostClick) {
-          addLog('success', `Successfully updated Poll Everywhere profile to Name="${screenName || 'N/A'}", Email="${participantEmail || 'N/A'}"`);
-          await new Promise(r => setTimeout(r, 1500));
+          addLog('success', `Successfully updated screen name to "${screenName}".`);
+          await new Promise(r => setTimeout(r, 1200));
           await updateScreenshot();
           return;
         }
@@ -552,6 +602,11 @@ async function scanAndVote() {
     // Comprehensive DOM Inspection across main document & any child frames
     const pollResult = await page.evaluate(() => {
       const cleanText = (str) => str ? str.trim().replace(/\s+/g, ' ') : '';
+      
+      const isAuthTitle = (txt) => {
+        const lower = (txt || '').toLowerCase().trim();
+        return lower === 'sign in' || lower === 'log in' || lower === 'login' || lower.includes('sign in to') || lower.includes('log in to') || lower.includes('welcome back') || lower.includes('enter email') || lower === 'continue';
+      };
 
       // Check explicit waiting screen elements
       const waitingEl = document.querySelector('[data-test-id="waiting-screen"], .component-waiting-screen, .pe-waiting-screen, [class*="waiting-screen"]');
@@ -562,7 +617,7 @@ async function scanAndVote() {
       });
 
       // Question title selectors
-      const questionEl = document.querySelector([
+      const rawQuestionEl = document.querySelector([
         '[data-test-id="question-title"]',
         '[data-test-id*="question"]',
         '[data-test-id*="poll-header"]',
@@ -579,7 +634,18 @@ async function scanAndVote() {
         'h2'
       ].join(','));
 
-      const questionText = questionEl ? cleanText(questionEl.innerText) : (waitingEl || explicitWaitingMsg ? 'Waiting for presenter...' : 'Poll Everywhere Page');
+      const rawTitle = rawQuestionEl ? cleanText(rawQuestionEl.innerText) : '';
+      let questionText = 'Waiting for presenter...';
+
+      if (rawTitle && !isAuthTitle(rawTitle)) {
+        questionText = rawTitle;
+      } else if (waitingEl || explicitWaitingMsg) {
+        questionText = 'Waiting for presenter...';
+      } else if (isAuthTitle(rawTitle)) {
+        questionText = 'Waiting for presenter...';
+      } else {
+        questionText = 'Poll Everywhere Page';
+      }
 
       // Multiple choice option selectors
       const optionSelectors = [
@@ -655,7 +721,7 @@ async function scanAndVote() {
 
       const selectedOptionIndex = options.findIndex(o => o.isSelected);
 
-      const hasActivePoll = options.length > 0 || (questionEl && questionText !== 'Waiting for presenter...' && questionText !== 'Poll Everywhere Page');
+      const hasActivePoll = options.length > 0 || (rawQuestionEl && !isAuthTitle(rawTitle) && questionText !== 'Waiting for presenter...' && questionText !== 'Poll Everywhere Page');
 
       return {
         isWaiting: (waitingEl !== null || explicitWaitingMsg !== null) && options.length === 0,
