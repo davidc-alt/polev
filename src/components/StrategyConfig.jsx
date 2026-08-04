@@ -216,7 +216,7 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
 
         {/* Participant Name & Polling Controls */}
         <div>
-          {/* Participant Name Box */}
+          {/* Participant Name Box (Non-Editable) */}
           <div style={{ marginBottom: '1.25rem' }}>
             <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               REGISTERED PARTICIPANT NAME
@@ -225,15 +225,16 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
               <input
                 type="text"
                 className="input-minimal"
-                placeholder="e.g. David Bondarescu"
-                value={state.screenName || ''}
-                onChange={(e) => onUpdateConfig({ screenName: e.target.value })}
-                style={{ paddingLeft: '2.2rem', background: '#ffffff' }}
+                value={state.screenName || 'David Bondarescu'}
+                readOnly
+                disabled
+                style={{ paddingLeft: '2.2rem', background: 'rgba(0,0,0,0.03)', cursor: 'default', opacity: 0.85 }}
+                title="Registered Participant Name (Non-Editable)"
               />
               <User size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-              This name will be automatically registered whenever Poll Everywhere prompts for participant name.
+              This name is non-editable and automatically registered whenever Poll Everywhere prompts for participant name.
             </p>
           </div>
 

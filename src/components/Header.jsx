@@ -139,16 +139,16 @@ export default function Header({
         {/* Target URL & Participant Name Controls (Instant Auto-Set on Type/Paste) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           
-          {/* Participant Name Input */}
+          {/* Participant Name Input (Non-Editable) */}
           <div style={{ position: 'relative', width: '180px' }}>
             <input
               type="text"
               className="input-minimal"
-              placeholder="Your Name"
-              value={state.screenName || ''}
-              onChange={(e) => onNameChange(e.target.value)}
-              style={{ paddingLeft: '2rem' }}
-              title="Poll Everywhere Registered Name"
+              value={state.screenName || 'David Bondarescu'}
+              readOnly
+              disabled
+              style={{ paddingLeft: '2rem', cursor: 'default', opacity: 0.85, backgroundColor: 'rgba(0,0,0,0.03)' }}
+              title="Registered Participant Name (Non-Editable)"
             />
             <User size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           </div>
