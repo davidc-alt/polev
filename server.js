@@ -364,23 +364,36 @@ async function autoSyncProfileAndLogin(page, state) {
         }
       }
 
-      // 2. If NO input is open, search for "Responding as [CurrentName]" or pencil ✏️ icon, or "Guest" menu!
+      // 2. Search for "Responding as [CurrentName]" badge and pencil ✏️ edit icon
       const clickAction = await frame.evaluate(({ targetName, targetEmail }) => {
         const clean = s => (s || '').trim().toLowerCase();
 
         const allEls = Array.from(document.querySelectorAll('*')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
 
-        // Find "Responding as..." text anywhere in DOM
-        const respondingAsEl = allEls.find(el => {
-          const txt = (el.innerText || el.textContent || '').trim();
-          return txt.toLowerCase().includes('responding as') && el.children.length < 8;
+        // Find elements whose text contains "responding as"
+        const candidates = allEls.filter(el => {
+          const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+          return txt.includes('responding as') && txt.length < 100;
         });
 
+        // Sort candidates by text length ASCENDING so we get the smallest specific badge node, not an outer wrapper!
+        candidates.sort((a, b) => {
+          const lenA = (a.innerText || a.textContent || '').length;
+          const lenB = (b.innerText || b.textContent || '').length;
+          return lenA - lenB;
+        });
+
+        const respondingAsEl = candidates[0];
+
         if (respondingAsEl) {
-          const fullText = respondingAsEl.innerText || respondingAsEl.textContent || '';
-          const currentName = fullText.replace(/responding as/gi, '').trim();
+          const fullText = (respondingAsEl.innerText || respondingAsEl.textContent || '').trim();
+          // Extract name after "responding as"
+          let currentName = fullText.replace(/responding as/gi, '').trim();
+          // Strip any trailing pencil icon characters if present
+          currentName = currentName.replace(/✏️|\u270F|\u270E|\u2710/g, '').trim();
 
           if (targetName && clean(currentName) !== clean(targetName)) {
+            // Find clickable pencil button/svg/path inside or next to respondingAsEl
             const editBtn = respondingAsEl.querySelector('button, svg, path, a, i, [role="button"]') || respondingAsEl;
             
             editBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
