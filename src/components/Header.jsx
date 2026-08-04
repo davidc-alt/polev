@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Play, Pause, RefreshCw, Zap, ExternalLink, User, Check, Edit2 } from 'lucide-react';
+import React from 'react';
+import { Play, Pause, RefreshCw, Zap, ExternalLink, User } from 'lucide-react';
 
 export default function Header({ 
   state, 
@@ -13,22 +13,13 @@ export default function Header({
   setActiveTab,
   onNameChange
 }) {
-  const [editingName, setEditingName] = useState(false);
-  const [nameInput, setNameInput] = useState(state.screenName || 'David Bondarescu');
-
   const getInitials = (name) => {
-    if (!name) return 'PE';
+    if (!name) return 'DB';
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) {
       return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     }
     return name.substring(0, 2).toUpperCase();
-  };
-
-  const handleSaveName = (e) => {
-    if (e) e.preventDefault();
-    onNameChange(nameInput);
-    setEditingName(false);
   };
 
   const handleUrlInputChange = (e) => {
@@ -98,35 +89,12 @@ export default function Header({
           </button>
         </div>
 
-        {/* Top Right: Custom Name Credit Badge & Edit Button */}
+        {/* Top Right: Static (Non-Editable) "by david bondarescu" Author Badge */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {editingName ? (
-            <form onSubmit={handleSaveName} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <input
-                type="text"
-                className="input-minimal"
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Enter your name"
-                autoFocus
-                style={{ padding: '0.35rem 0.85rem', fontSize: '0.85rem', width: '160px' }}
-              />
-              <button type="submit" className="btn-dark" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
-                <Check size={14} /> Save
-              </button>
-            </form>
-          ) : (
-            <div 
-              className="credit-badge" 
-              onClick={() => { setNameInput(state.screenName || ''); setEditingName(true); }}
-              style={{ cursor: 'pointer' }}
-              title="Click to edit your name"
-            >
-              <div className="credit-avatar">{getInitials(state.screenName)}</div>
-              <span>by <strong>{state.screenName || 'David Bondarescu'}</strong></span>
-              <Edit2 size={12} style={{ opacity: 0.6, marginLeft: '0.2rem' }} />
-            </div>
-          )}
+          <div className="credit-badge" title="Developer Credit">
+            <div className="credit-avatar">{getInitials(state.screenName)}</div>
+            <span>by <strong>david bondarescu</strong></span>
+          </div>
 
           <button 
             onClick={onManualScan}
@@ -185,12 +153,12 @@ export default function Header({
             <User size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           </div>
 
-          {/* Instant Auto-Setting Target URL Input (No Redundant Button) */}
+          {/* Instant Auto-Setting Target URL Input */}
           <div style={{ position: 'relative', width: '280px' }}>
             <input
               type="text"
               className="input-minimal"
-              placeholder="pollev.com/username"
+              placeholder="pollev.com/username or pe.app/..."
               value={targetInput}
               onChange={handleUrlInputChange}
               style={{ paddingRight: '2.2rem' }}

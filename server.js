@@ -43,6 +43,7 @@ let browser = null;
 let page = null;
 let timerId = null;
 let sseClients = [];
+let lastNavigatedUrl = null;
 
 function addLog(type, message, details = {}) {
   const logEntry = {
@@ -72,6 +73,16 @@ function formatUrl(rawUrl) {
     url = 'https://' + url;
   }
   return url;
+}
+
+function isPollevDomain(urlStr) {
+  if (!urlStr) return false;
+  try {
+    const host = new URL(urlStr).hostname.toLowerCase();
+    return host.includes('pollev.com') || host.includes('pe.app') || host.includes('poll-everywhere');
+  } catch (e) {
+    return false;
+  }
 }
 
 async function askGeminiForAnswer(question, options, apiKey) {
@@ -157,22 +168,23 @@ async function scanAndVote() {
       page = await browser.newPage();
       await page.setViewport({ width: 1280, height: 800 });
       await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      lastNavigatedUrl = null;
     }
 
     const currentUrl = page.url();
     const formattedTarget = formatUrl(state.targetUrl);
 
-    if (!currentUrl || currentUrl === 'about:blank' || !currentUrl.includes(new URL(formattedTarget).hostname)) {
+    // Only perform full page navigation if we haven't loaded the target page yet, or if target URL changed
+    const needsNavigation = !currentUrl || 
+                             currentUrl === 'about:blank' || 
+                             lastNavigatedUrl !== formattedTarget ||
+                             (!isPollevDomain(currentUrl) && !isPollevDomain(formattedTarget));
+
+    if (needsNavigation) {
       addLog('info', `Navigating to ${formattedTarget}...`);
       await page.goto(formattedTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await new Promise(r => setTimeout(r, 2000));
-    } else {
-      try {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-        await new Promise(r => setTimeout(r, 1500));
-      } catch (err) {
-        addLog('warn', `Reload timeout, checking existing page DOM.`);
-      }
+      lastNavigatedUrl = formattedTarget;
+      await new Promise(r => setTimeout(r, 2500));
     }
 
     // Auto-fill Screen / Participant Name if Poll Everywhere prompts for registration
@@ -228,17 +240,30 @@ async function scanAndVote() {
       console.error('Screenshot error:', e.message);
     }
 
+    // Enhanced DOM Inspection for Poll Everywhere options & questions
     const pollResult = await page.evaluate(() => {
       const cleanText = (str) => str ? str.trim().replace(/\s+/g, ' ') : '';
 
       const waitingEl = document.querySelector('[data-test-id="waiting-screen"], .component-waiting-screen, .pe-waiting-screen');
-      const waitingTextFound = document.body.innerText.toLowerCase().includes('waiting for presenter') || 
-                               document.body.innerText.toLowerCase().includes('no active poll') ||
-                               document.body.innerText.toLowerCase().includes('presenter is offline');
+      const bodyTextLower = (document.body.innerText || '').toLowerCase();
+      const waitingTextFound = bodyTextLower.includes('waiting for presenter') || 
+                               bodyTextLower.includes('no active poll') ||
+                               bodyTextLower.includes('presenter is offline') ||
+                               bodyTextLower.includes('when the presenter starts');
 
-      const questionEl = document.querySelector(
-        '[data-test-id="question-title"], .component-poll-header__title, .pe-question-title, [role="heading"], h1, h2, .component-response-header__title'
-      );
+      const questionEl = document.querySelector([
+        '[data-test-id="question-title"]',
+        '.component-poll-header__title',
+        '.component-response-header__title',
+        '.pe-question-title',
+        '[class*="question-title"]',
+        '[class*="poll-title"]',
+        '[class*="header__title"]',
+        '[role="heading"]',
+        'h1',
+        'h2'
+      ].join(','));
+
       const questionText = questionEl ? cleanText(questionEl.innerText) : (waitingTextFound ? 'Waiting for presenter to start...' : 'Poll Everywhere Page');
 
       const optionSelectors = [
@@ -250,7 +275,9 @@ async function scanAndVote() {
         '.component-response-multiple-choice__option',
         'button[data-test-id*="option"]',
         '[role="button"][class*="option"]',
-        '.component-response-clickable-image__target'
+        '[class*="multiple-choice__option"]',
+        '.component-response-clickable-image__target',
+        '[data-test-id*="clickable-image"]'
       ];
 
       let rawOptions = [];
@@ -263,11 +290,11 @@ async function scanAndVote() {
       }
 
       if (rawOptions.length === 0) {
-        const responseContainer = document.querySelector('.component-response, .pe-response-body, main');
+        const responseContainer = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main');
         if (responseContainer) {
-          rawOptions = Array.from(document.querySelectorAll('button')).filter(btn => {
-            const txt = btn.innerText || '';
-            return txt.trim().length > 0 && !txt.toLowerCase().includes('submit') && !txt.toLowerCase().includes('clear');
+          rawOptions = Array.from(responseContainer.querySelectorAll('button, [role="button"]')).filter(btn => {
+            const txt = (btn.innerText || '').trim();
+            return txt.length > 0 && !txt.toLowerCase().includes('submit') && !txt.toLowerCase().includes('clear') && !txt.toLowerCase().includes('introduce');
           });
         }
       }
@@ -275,6 +302,7 @@ async function scanAndVote() {
       const options = rawOptions.map((el, index) => {
         const isSelected = el.classList.contains('component-response-option--selected') || 
                            el.getAttribute('aria-pressed') === 'true' ||
+                           el.getAttribute('aria-selected') === 'true' ||
                            el.getAttribute('data-selected') === 'true' ||
                            el.querySelector('.component-response-option__selected-icon') !== null;
         return {
@@ -347,7 +375,9 @@ async function scanAndVote() {
             'button[class*="component-response-option"]',
             '.pe-response-option__button',
             '.component-response-multiple-choice__option',
-            'button[data-test-id*="option"]'
+            'button[data-test-id*="option"]',
+            '[role="button"][class*="option"]',
+            '[class*="multiple-choice__option"]'
           ];
           let els = [];
           for (const sel of optionSelectors) {
@@ -355,12 +385,23 @@ async function scanAndVote() {
             if (found.length > 0) { els = found; break; }
           }
           if (els.length === 0) {
-            const main = document.querySelector('.component-response, .pe-response-body, main');
-            if (main) els = Array.from(main.querySelectorAll('button'));
+            const main = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main');
+            if (main) els = Array.from(main.querySelectorAll('button, [role="button"]'));
           }
 
           if (els[idx]) {
             els[idx].click();
+
+            // Click Submit button if present
+            setTimeout(() => {
+              const submitBtns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+              const submitBtn = submitBtns.find(b => {
+                const txt = (b.innerText || b.value || '').toLowerCase();
+                return txt.includes('submit') || txt.includes('send') || txt.includes('vote');
+              });
+              if (submitBtn) submitBtn.click();
+            }, 300);
+
             return true;
           }
           return false;
@@ -398,51 +439,24 @@ async function scanAndVote() {
       addLog('info', `No active poll found on ${state.targetUrl} (Status: ${pollResult.question})`);
     }
 
-  } catch (err) {
-    addLog('error', `Scan error: ${err.message}`);
-    console.error('Scan error:', err);
+    broadcastSSE({ type: 'stateUpdate', state });
+  } catch (error) {
+    addLog('error', `Scan error: ${error.message}`);
+    console.error('Scan error:', error);
   }
-
-  broadcastSSE({
-    type: 'stateUpdate',
-    state: {
-      isMonitoring: state.isMonitoring,
-      isAutoVoting: state.isAutoVoting,
-      targetUrl: state.targetUrl,
-      screenName: state.screenName,
-      intervalSeconds: state.intervalSeconds,
-      strategy: state.strategy,
-      optionIndex: state.optionIndex,
-      geminiApiKey: state.geminiApiKey,
-      stats: state.stats,
-      currentPoll: state.currentPoll,
-      lastScreenshot: state.lastScreenshot
-    }
-  });
 }
 
-function startMonitoring() {
-  if (state.isMonitoring) return;
-  state.isMonitoring = true;
-  addLog('info', `Monitoring started. Scanning every ${state.intervalSeconds} seconds.`);
-  
-  scanAndVote();
-  
-  clearInterval(timerId);
-  timerId = setInterval(() => {
-    if (state.isMonitoring) {
-      scanAndVote();
-    }
-  }, state.intervalSeconds * 1000);
+function startTimer() {
+  if (timerId) clearInterval(timerId);
+  const ms = Math.max(5000, (state.intervalSeconds || 30) * 1000);
+  timerId = setInterval(scanAndVote, ms);
 }
 
-function stopMonitoring() {
-  state.isMonitoring = false;
+function stopTimer() {
   if (timerId) {
     clearInterval(timerId);
     timerId = null;
   }
-  addLog('info', `Monitoring paused.`);
 }
 
 // API Routes
@@ -450,114 +464,111 @@ app.get('/api/status', (req, res) => {
   res.json(state);
 });
 
-app.post('/api/start', (req, res) => {
-  startMonitoring();
-  res.json({ success: true, isMonitoring: state.isMonitoring });
-});
-
-app.post('/api/stop', (req, res) => {
-  stopMonitoring();
-  res.json({ success: true, isMonitoring: state.isMonitoring });
-});
-
-app.post('/api/config', async (req, res) => {
-  const { targetUrl, screenName, intervalSeconds, strategy, optionIndex, geminiApiKey, isAutoVoting, headful } = req.body;
-  
-  let resetBrowser = false;
-
-  if (targetUrl !== undefined) state.targetUrl = targetUrl;
-  if (screenName !== undefined) state.screenName = screenName;
-  if (intervalSeconds !== undefined) {
-    state.intervalSeconds = Math.max(5, parseInt(intervalSeconds) || 30);
-    if (state.isMonitoring) {
-      clearInterval(timerId);
-      timerId = setInterval(scanAndVote, state.intervalSeconds * 1000);
-    }
-  }
-  if (strategy !== undefined) state.strategy = strategy;
-  if (optionIndex !== undefined) state.optionIndex = parseInt(optionIndex) || 0;
-  if (geminiApiKey !== undefined) state.geminiApiKey = geminiApiKey;
-  if (isAutoVoting !== undefined) state.isAutoVoting = Boolean(isAutoVoting);
-
-  if (headful !== undefined && Boolean(headful) !== state.headful) {
-    state.headful = Boolean(headful);
-    resetBrowser = true;
-  }
-
-  addLog('info', `Configuration updated: Name="${state.screenName}", Interval=${state.intervalSeconds}s, Strategy=${state.strategy.toUpperCase()}`);
-
-  if (resetBrowser && browser) {
-    try {
-      await browser.close();
-      browser = null;
-      page = null;
-    } catch (e) {}
-  }
-
+app.post('/api/start', async (req, res) => {
+  state.isMonitoring = true;
+  startTimer();
+  addLog('info', 'Started 30s monitoring loop.');
+  scanAndVote();
   res.json({ success: true, state });
 });
 
-app.post('/api/manual-scan', async (req, res) => {
-  addLog('info', `Manual scan triggered by user.`);
+app.post('/api/stop', (req, res) => {
+  state.isMonitoring = false;
+  stopTimer();
+  addLog('info', 'Stopped monitoring loop.');
+  res.json({ success: true, state });
+});
+
+app.post('/api/manual-scan', (req, res) => {
   scanAndVote();
-  res.json({ success: true, message: 'Scan initiated' });
+  res.json({ success: true });
 });
 
 app.post('/api/manual-vote', async (req, res) => {
   const { index } = req.body;
-  if (index === undefined || !state.currentPoll.options[index]) {
-    return res.status(400).json({ error: 'Invalid option index' });
+  if (!page || !browser) {
+    return res.status(400).json({ error: 'Browser session not active.' });
   }
 
-  addLog('info', `Manual vote triggered for option index ${index}: "${state.currentPoll.options[index].text}"`);
-
-  if (page) {
-    try {
-      const clicked = await page.evaluate((idx) => {
-        const optionSelectors = [
-          '.component-response-option',
-          '[data-test-id*="response-option"]',
-          'button[class*="response-option"]',
-          'button[class*="component-response-option"]',
-          '.pe-response-option__button',
-          '.component-response-multiple-choice__option',
-          'button[data-test-id*="option"]'
-        ];
-        let els = [];
-        for (const sel of optionSelectors) {
-          const found = Array.from(document.querySelectorAll(sel));
-          if (found.length > 0) { els = found; break; }
-        }
-        if (els[idx]) {
-          els[idx].click();
-          return true;
-        }
-        return false;
-      }, index);
-
-      if (clicked) {
-        state.stats.votesSubmitted++;
-        state.stats.lastVoteTime = new Date().toISOString();
-        state.currentPoll.selectedOption = state.currentPoll.options[index].text;
-        addLog('success', `Manual vote successful: "${state.currentPoll.options[index].text}"`);
-        
-        await new Promise(r => setTimeout(r, 1000));
-        try {
-          const screenshotBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 60 });
-          state.lastScreenshot = `data:image/jpeg;base64,${screenshotBase64}`;
-        } catch (e) {}
+  try {
+    const success = await page.evaluate((idx) => {
+      const optionSelectors = [
+        '.component-response-option',
+        '[data-test-id*="response-option"]',
+        'button[class*="response-option"]',
+        'button[class*="component-response-option"]',
+        '.pe-response-option__button',
+        '.component-response-multiple-choice__option',
+        'button[data-test-id*="option"]'
+      ];
+      let els = [];
+      for (const sel of optionSelectors) {
+        const found = Array.from(document.querySelectorAll(sel));
+        if (found.length > 0) { els = found; break; }
       }
-    } catch (e) {
-      addLog('error', `Manual vote failed: ${e.message}`);
+      if (els.length === 0) {
+        const main = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main');
+        if (main) els = Array.from(main.querySelectorAll('button, [role="button"]'));
+      }
+      if (els[idx]) {
+        els[idx].click();
+        return true;
+      }
+      return false;
+    }, index);
+
+    if (success) {
+      state.stats.votesSubmitted++;
+      state.stats.lastVoteTime = new Date().toISOString();
+      addLog('success', `Manual vote submitted for option index #${index + 1}`);
+      await new Promise(r => setTimeout(r, 800));
+      try {
+        const screenshotBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 60 });
+        state.lastScreenshot = `data:image/jpeg;base64,${screenshotBase64}`;
+      } catch (e) {}
+      broadcastSSE({ type: 'stateUpdate', state });
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ error: 'Failed to click option on page.' });
     }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/config', (req, res) => {
+  const { isAutoVoting, targetUrl, intervalSeconds, strategy, optionIndex, geminiApiKey, headful, screenName } = req.body;
+  
+  let targetChanged = false;
+  if (targetUrl !== undefined && targetUrl !== state.targetUrl) {
+    state.targetUrl = targetUrl;
+    targetChanged = true;
+    lastNavigatedUrl = null;
+  }
+  if (isAutoVoting !== undefined) state.isAutoVoting = isAutoVoting;
+  if (intervalSeconds !== undefined) state.intervalSeconds = parseInt(intervalSeconds);
+  if (strategy !== undefined) state.strategy = strategy;
+  if (optionIndex !== undefined) state.optionIndex = parseInt(optionIndex);
+  if (geminiApiKey !== undefined) state.geminiApiKey = geminiApiKey;
+  if (headful !== undefined) state.headful = headful;
+  if (screenName !== undefined) state.screenName = screenName;
+
+  if (state.isMonitoring) {
+    startTimer();
   }
 
+  addLog('info', 'Updated configuration.', req.body);
+  
+  if (targetChanged && state.isMonitoring) {
+    scanAndVote();
+  }
+
+  broadcastSSE({ type: 'stateUpdate', state });
   res.json({ success: true, state });
 });
 
 app.post('/api/logs/clear', (req, res) => {
   state.logs = [];
-  addLog('info', 'Activity logs cleared.');
   res.json({ success: true });
 });
 
@@ -565,7 +576,6 @@ app.get('/api/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
 
   const clientId = Date.now();
   const newClient = { id: clientId, res };
@@ -578,20 +588,17 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
+// Serve static React build files
 const distPath = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
-  app.get('/{*path}', (req, res, next) => {
-    if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(distPath, 'index.html'));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(distPath, 'index.html'));
+    }
   });
 }
 
-process.on('SIGINT', async () => {
-  if (browser) await browser.close();
-  process.exit();
-});
-
 app.listen(PORT, () => {
-  console.log(`🚀 Poll Everywhere Auto-Responder Backend running on http://localhost:${PORT}`);
+  console.log(`Poll Everywhere Automator running on http://localhost:${PORT}`);
 });
