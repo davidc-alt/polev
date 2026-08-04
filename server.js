@@ -463,6 +463,30 @@ async function autoSyncProfileAndLogin(page, state) {
   }
 }
 
+async function prewarmBrowser() {
+  try {
+    const activeBrowser = await getOrLaunchBrowser();
+    if (!page || page.isClosed()) {
+      page = await activeBrowser.newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        window.chrome = window.chrome || { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+      });
+      lastNavigatedUrl = null;
+    }
+    const formattedTarget = formatUrl(state.targetUrl);
+    if (page.url() !== formattedTarget && isPollevDomain(formattedTarget)) {
+      await page.goto(formattedTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      lastNavigatedUrl = formattedTarget;
+    }
+  } catch (e) {
+    console.error('Pre-warm browser note:', e.message);
+  }
+}
+
 async function scanAndVote() {
   state.stats.checksPerformed++;
   state.stats.lastCheckTime = new Date().toISOString();
@@ -502,7 +526,6 @@ async function scanAndVote() {
       await page.goto(formattedTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
       lastNavigatedUrl = formattedTarget;
       consecutiveMisses = 0;
-      await new Promise(r => setTimeout(r, 3000));
     }
 
     // Auto-fill Screen Name & Email Address (with pencil icon ✏️ click & login flow support)
@@ -874,6 +897,10 @@ app.post('/api/config', (req, res) => {
 
   addLog('info', 'Updated configuration.', req.body);
   
+  if (targetChanged || screenName || participantEmail) {
+    prewarmBrowser();
+  }
+
   if (targetChanged && state.isMonitoring) {
     scanAndVote();
   }
@@ -918,4 +945,5 @@ if (fs.existsSync(distPath)) {
 // Bind to 0.0.0.0 for Render / Cloud reverse proxy compatibility
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Poll Everywhere Automator running on http://0.0.0.0:${PORT}`);
+  prewarmBrowser();
 });
