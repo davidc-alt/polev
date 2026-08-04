@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Sliders, Dices, ArrowUpRight, Hash, Sparkles, Eye, EyeOff, Power, Key, CheckCircle2, User, Mail } from 'lucide-react';
+import { Sliders, Dices, ArrowUpRight, Hash, Sparkles, Eye, EyeOff, Power, Key, CheckCircle2, User, Mail, Lock } from 'lucide-react';
 
 export default function StrategyConfig({ state, onUpdateConfig }) {
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleStrategyChange = (newStrategy) => {
     onUpdateConfig({ strategy: newStrategy });
@@ -214,14 +215,14 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
 
         </div>
 
-        {/* Participant Name & Email Profile */}
+        {/* Participant Name, Email & Password Profile */}
         <div>
           <div style={{ marginBottom: '1.25rem' }}>
             <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              REGISTERED PARTICIPANT PROFILE
+              REGISTERED PARTICIPANT & ACCOUNT LOGIN
             </label>
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {/* Screen Name */}
               <div style={{ position: 'relative' }}>
                 <input
@@ -236,23 +237,57 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
                 <User size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               </div>
 
-              {/* Email Address */}
-              <div style={{ position: 'relative' }}>
-                <input
-                  type="email"
-                  className="input-minimal"
-                  placeholder="Email (e.g. david@example.com)"
-                  value={state.participantEmail || ''}
-                  onChange={(e) => onUpdateConfig({ participantEmail: e.target.value })}
-                  style={{ paddingLeft: '2.2rem', background: 'var(--bg-card-secondary)' }}
-                  title="Registered Participant Email"
-                />
-                <Mail size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              {/* Email Address & Password Row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                {/* Email Address */}
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="email"
+                    className="input-minimal"
+                    placeholder="Account Email (e.g. david@example.com)"
+                    value={state.participantEmail || ''}
+                    onChange={(e) => onUpdateConfig({ participantEmail: e.target.value })}
+                    style={{ paddingLeft: '2.2rem', background: 'var(--bg-card-secondary)' }}
+                    title="Account Email Address"
+                  />
+                  <Mail size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                </div>
+
+                {/* Password (Optional) */}
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    className="input-minimal"
+                    placeholder="Password (Optional)"
+                    value={state.participantPassword || ''}
+                    onChange={(e) => onUpdateConfig({ participantPassword: e.target.value })}
+                    style={{ paddingLeft: '2.2rem', paddingRight: '2.2rem', background: 'var(--bg-card-secondary)' }}
+                    title="Account Password (Optional)"
+                  />
+                  <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--text-muted)'
+                    }}
+                    title={showPassword ? 'Hide Password' : 'Show Password'}
+                  >
+                    {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
               </div>
             </div>
 
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-              Name and email are automatically entered whenever Poll Everywhere prompts for participant registration or login.
+              Auto-syncs screen name (clicks pencil ✏️ icon on "Responding as...") and auto-logs in with your email/password when prompted.
             </p>
           </div>
 
