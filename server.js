@@ -3,6 +3,7 @@ import cors from 'cors';
 import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 
 // Prevent process exit on uncaught errors (vital for cloud hosting stability)
 process.on('uncaughtException', (err) => {
@@ -165,6 +166,56 @@ Respond ONLY with a valid JSON object in this exact schema:
   };
 }
 
+function findChromeExecutableInDir(dir) {
+  try {
+    if (!fs.existsSync(dir)) return null;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const found = findChromeExecutableInDir(fullPath);
+        if (found) return found;
+      } else if (entry.isFile()) {
+        if (entry.name === 'chrome' || entry.name === 'chromium' || entry.name === 'chrome.exe') {
+          return fullPath;
+        }
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+function searchAllChromeExecutables() {
+  const custom = process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (custom && fs.existsSync(custom)) return custom;
+
+  const standardPaths = [
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chrome',
+    '/opt/google/chrome/chrome'
+  ];
+  for (const p of standardPaths) {
+    if (fs.existsSync(p)) return p;
+  }
+
+  const searchDirs = [
+    path.join(process.cwd(), '.cache', 'puppeteer'),
+    '/opt/render/.cache/puppeteer',
+    '/opt/render/project/src/.cache/puppeteer',
+    path.join(process.env.HOME || '/root', '.cache', 'puppeteer')
+  ];
+
+  for (const dir of searchDirs) {
+    const found = findChromeExecutableInDir(dir);
+    if (found) return found;
+  }
+
+  return null;
+}
+
 async function getOrLaunchBrowser() {
   if (browser && browser.connected) return browser;
 
@@ -180,14 +231,6 @@ async function getOrLaunchBrowser() {
     '--window-size=1280,800'
   ];
 
-  const possibleExecutables = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/google-chrome'
-  ].filter(Boolean);
-
   let launched = null;
 
   try {
@@ -196,17 +239,36 @@ async function getOrLaunchBrowser() {
       args: launchArgs
     });
   } catch (err1) {
-    addLog('warn', `Standard launch failed (${err1.message}). Trying custom executable paths...`);
-    for (const exe of possibleExecutables) {
-      if (fs.existsSync(exe)) {
-        try {
+    addLog('warn', `Standard launch failed (${err1.message}). Searching cached/system Chrome executables...`);
+    
+    let chromePath = searchAllChromeExecutables();
+    
+    if (chromePath) {
+      try {
+        launched = await puppeteer.launch({
+          headless: true,
+          executablePath: chromePath,
+          args: launchArgs
+        });
+      } catch (e) {
+        addLog('warn', `Launch with found executable at ${chromePath} failed: ${e.message}`);
+      }
+    }
+
+    if (!launched) {
+      addLog('warn', `No valid Chrome binary found. Triggering automatic on-demand browser installation...`);
+      try {
+        execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
+        chromePath = searchAllChromeExecutables();
+        if (chromePath) {
           launched = await puppeteer.launch({
             headless: true,
-            executablePath: exe,
+            executablePath: chromePath,
             args: launchArgs
           });
-          if (launched) break;
-        } catch (e) {}
+        }
+      } catch (installErr) {
+        addLog('error', `Automatic Chrome installation failed: ${installErr.message}`);
       }
     }
   }
