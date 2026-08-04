@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sliders, Dices, ArrowUpRight, Hash, Sparkles, Eye, EyeOff, Power, Key, CheckCircle2, User } from 'lucide-react';
+import { Sliders, Dices, ArrowUpRight, Hash, Sparkles, Eye, EyeOff, Power, Key, CheckCircle2, User, Mail } from 'lucide-react';
 
 export default function StrategyConfig({ state, onUpdateConfig }) {
   const [showApiKey, setShowApiKey] = useState(false);
@@ -214,27 +214,45 @@ export default function StrategyConfig({ state, onUpdateConfig }) {
 
         </div>
 
-        {/* Participant Name & Polling Controls */}
+        {/* Participant Name & Email Profile */}
         <div>
-          {/* Participant Name Box (Editable) */}
           <div style={{ marginBottom: '1.25rem' }}>
             <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              REGISTERED PARTICIPANT NAME
+              REGISTERED PARTICIPANT PROFILE
             </label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                className="input-minimal"
-                placeholder="David Bondarescu"
-                value={state.screenName || ''}
-                onChange={(e) => onUpdateConfig({ screenName: e.target.value })}
-                style={{ paddingLeft: '2.2rem', background: 'var(--bg-card-secondary)' }}
-                title="Registered Participant Name"
-              />
-              <User size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              {/* Screen Name */}
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  className="input-minimal"
+                  placeholder="Screen Name (e.g. David Bondarescu)"
+                  value={state.screenName || ''}
+                  onChange={(e) => onUpdateConfig({ screenName: e.target.value })}
+                  style={{ paddingLeft: '2.2rem', background: 'var(--bg-card-secondary)' }}
+                  title="Registered Participant Name"
+                />
+                <User size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              </div>
+
+              {/* Email Address */}
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="email"
+                  className="input-minimal"
+                  placeholder="Email (e.g. david@example.com)"
+                  value={state.participantEmail || ''}
+                  onChange={(e) => onUpdateConfig({ participantEmail: e.target.value })}
+                  style={{ paddingLeft: '2.2rem', background: 'var(--bg-card-secondary)' }}
+                  title="Registered Participant Email"
+                />
+                <Mail size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              </div>
             </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-              This name is automatically registered whenever Poll Everywhere prompts for participant name.
+
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+              Name and email are automatically entered whenever Poll Everywhere prompts for participant registration or login.
             </p>
           </div>
 

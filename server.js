@@ -25,6 +25,7 @@ let state = {
   isAutoVoting: true,
   targetUrl: 'https://pollev.com/demouser',
   screenName: 'David Bondarescu',
+  participantEmail: '',
   intervalSeconds: 30,
   strategy: 'random', // 'random' | 'first' | 'index' | 'ai'
   optionIndex: 0,
@@ -323,47 +324,87 @@ async function scanAndVote() {
       await new Promise(r => setTimeout(r, 3000));
     }
 
-    // Auto-fill Screen / Participant Name if Poll Everywhere prompts for registration
-    if (state.screenName) {
-      const nameFilled = await page.evaluate((nameToSet) => {
-        const nameSelectors = [
-          'input[data-test-id*="screen-name"]',
-          'input[name="screen_name"]',
-          'input[name*="screen_name"]',
-          'input[placeholder*="name" i]',
-          'input[placeholder*="Name"]',
-          '.component-screen-name-input',
-          '#screen_name'
-        ];
-        let inputEl = null;
-        for (const sel of nameSelectors) {
-          const el = document.querySelector(sel);
-          if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
-            inputEl = el;
-            break;
+    // Auto-fill Screen Name & Email Address if Poll Everywhere prompts for registration or login
+    if (state.screenName || state.participantEmail) {
+      const regResult = await page.evaluate(({ nameToSet, emailToSet }) => {
+        let filledSomething = false;
+
+        // 1. Participant Screen Name
+        if (nameToSet) {
+          const nameSelectors = [
+            'input[data-test-id*="screen-name"]',
+            'input[name="screen_name"]',
+            'input[name*="screen_name"]',
+            'input[placeholder*="name" i]',
+            'input[placeholder*="Name"]',
+            '.component-screen-name-input',
+            '#screen_name',
+            'input[id*="screen_name"]',
+            'input[id*="participant_name"]'
+          ];
+          let nameInput = null;
+          for (const sel of nameSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+              nameInput = el;
+              break;
+            }
+          }
+
+          if (nameInput && nameInput.value !== nameToSet) {
+            nameInput.value = nameToSet;
+            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+            nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+            filledSomething = true;
           }
         }
 
-        if (inputEl && inputEl.value !== nameToSet) {
-          inputEl.value = nameToSet;
-          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-          inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+        // 2. Participant Email Address
+        if (emailToSet) {
+          const emailSelectors = [
+            'input[type="email"]',
+            'input[name="email"]',
+            'input[name*="email"]',
+            'input[placeholder*="email" i]',
+            'input[placeholder*="Email"]',
+            'input[data-test-id*="email"]',
+            'input[id*="email"]',
+            '#email',
+            '#user_email'
+          ];
+          let emailInput = null;
+          for (const sel of emailSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+              emailInput = el;
+              break;
+            }
+          }
 
+          if (emailInput && emailInput.value !== emailToSet) {
+            emailInput.value = emailToSet;
+            emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+            emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+            filledSomething = true;
+          }
+        }
+
+        if (filledSomething) {
           const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
           const submitBtn = btns.find(b => {
             const txt = (b.innerText || b.value || '').toLowerCase();
-            return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done');
+            return txt.includes('introduce') || txt.includes('save') || txt.includes('continue') || txt.includes('submit') || txt.includes('join') || txt.includes('done') || txt.includes('next') || txt.includes('log in');
           });
           if (submitBtn) {
             submitBtn.click();
-            return true;
           }
+          return { filled: true };
         }
-        return false;
-      }, state.screenName);
+        return { filled: false };
+      }, { nameToSet: state.screenName, emailToSet: state.participantEmail });
 
-      if (nameFilled) {
-        addLog('info', `Registered participant name on Poll Everywhere: "${state.screenName}"`);
+      if (regResult.filled) {
+        addLog('info', `Registered profile on Poll Everywhere: Name="${state.screenName || 'N/A'}", Email="${state.participantEmail || 'N/A'}"`);
         await new Promise(r => setTimeout(r, 1500));
       }
     }
@@ -710,7 +751,7 @@ app.post('/api/manual-vote', async (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-  const { isAutoVoting, targetUrl, intervalSeconds, strategy, optionIndex, geminiApiKey, headful, screenName } = req.body;
+  const { isAutoVoting, targetUrl, intervalSeconds, strategy, optionIndex, geminiApiKey, headful, screenName, participantEmail } = req.body;
   
   let targetChanged = false;
   if (targetUrl !== undefined && targetUrl !== state.targetUrl) {
@@ -725,6 +766,7 @@ app.post('/api/config', (req, res) => {
   if (geminiApiKey !== undefined) state.geminiApiKey = geminiApiKey;
   if (headful !== undefined) state.headful = headful;
   if (screenName !== undefined) state.screenName = screenName;
+  if (participantEmail !== undefined) state.participantEmail = participantEmail;
 
   if (state.isMonitoring) {
     startTimer();
