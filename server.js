@@ -4,6 +4,14 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'fs';
 
+// Prevent process exit on uncaught errors (vital for cloud hosting stability)
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception captured:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection captured:', reason);
+});
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -139,6 +147,61 @@ Respond ONLY with a valid JSON object in this exact schema:
   };
 }
 
+async function getOrLaunchBrowser() {
+  if (browser && browser.connected) return browser;
+
+  const launchArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-zygote',
+    '--single-process',
+    '--window-size=1280,800'
+  ];
+
+  const possibleExecutables = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome'
+  ].filter(Boolean);
+
+  let launched = null;
+
+  // Try standard launch first
+  try {
+    launched = await puppeteer.launch({
+      headless: !state.headful,
+      args: launchArgs
+    });
+  } catch (err1) {
+    addLog('warn', `Standard launch failed (${err1.message}). Trying custom executable paths...`);
+    for (const exe of possibleExecutables) {
+      if (fs.existsSync(exe)) {
+        try {
+          launched = await puppeteer.launch({
+            headless: true,
+            executablePath: exe,
+            args: launchArgs
+          });
+          if (launched) break;
+        } catch (e) {}
+      }
+    }
+  }
+
+  if (!launched) {
+    throw new Error('Could not launch Chromium/Chrome browser session.');
+  }
+
+  browser = launched;
+  return browser;
+}
+
 async function scanAndVote() {
   state.stats.checksPerformed++;
   state.stats.lastCheckTime = new Date().toISOString();
@@ -146,38 +209,10 @@ async function scanAndVote() {
   addLog('scan', `Checking Poll Everywhere target: ${state.targetUrl}`);
 
   try {
-    if (!browser || !browser.connected) {
-      addLog('info', `Initializing Puppeteer browser (${state.headful ? 'Visible window' : 'Headless mode'})...`);
-      
-      const launchArgs = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
-        '--window-size=1280,800'
-      ];
-
-      const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
-
-      try {
-        browser = await puppeteer.launch({
-          headless: !state.headful,
-          executablePath: executablePath || undefined,
-          args: launchArgs
-        });
-      } catch (launchErr) {
-        addLog('warn', `Standard browser launch failed: ${launchErr.message}. Retrying with default executable...`);
-        browser = await puppeteer.launch({
-          headless: true,
-          args: launchArgs
-        });
-      }
-
-      page = await browser.newPage();
+    const activeBrowser = await getOrLaunchBrowser();
+    
+    if (!page || page.isClosed()) {
+      page = await activeBrowser.newPage();
       await page.setViewport({ width: 1280, height: 800 });
       await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       lastNavigatedUrl = null;
@@ -186,7 +221,7 @@ async function scanAndVote() {
     const currentUrl = page.url();
     const formattedTarget = formatUrl(state.targetUrl);
 
-    // Only perform full page navigation if we haven't loaded the target page yet, or if target URL changed
+    // Only perform full page navigation if target changed or initial blank
     const needsNavigation = !currentUrl || 
                              currentUrl === 'about:blank' || 
                              lastNavigatedUrl !== formattedTarget ||
@@ -611,6 +646,7 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Poll Everywhere Automator running on http://localhost:${PORT}`);
+// Bind to 0.0.0.0 for Render / Cloud reverse proxy compatibility
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Poll Everywhere Automator running on http://0.0.0.0:${PORT}`);
 });
