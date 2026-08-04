@@ -93,6 +93,8 @@ function isPollevDomain(urlStr) {
   }
 }
 
+let consecutiveMisses = 0;
+
 async function askGeminiForAnswer(question, options, apiKey) {
   if (!apiKey) {
     throw new Error('Gemini API key is missing. Please enter your key in settings.');
@@ -134,7 +136,23 @@ Respond ONLY with a valid JSON object in this exact schema:
     throw new Error('Gemini API returned an empty response.');
   }
 
-  const parsed = JSON.parse(rawText);
+  let cleanedText = rawText.trim();
+  if (cleanedText.includes('```')) {
+    cleanedText = cleanedText.replace(/^```(?:json)?/gi, '').replace(/```$/gi, '').trim();
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(cleanedText);
+  } catch (err) {
+    const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      parsed = JSON.parse(jsonMatch[0]);
+    } else {
+      throw new Error(`Failed to parse Gemini JSON: ${cleanedText.substring(0, 100)}`);
+    }
+  }
+
   let chosenIndex = parseInt(parsed.chosenIndex);
 
   if (isNaN(chosenIndex) || chosenIndex < 0 || chosenIndex >= options.length) {
@@ -158,7 +176,7 @@ async function getOrLaunchBrowser() {
     '--disable-gpu',
     '--no-first-run',
     '--no-zygote',
-    '--single-process',
+    '--disable-blink-features=AutomationControlled',
     '--window-size=1280,800'
   ];
 
@@ -172,7 +190,6 @@ async function getOrLaunchBrowser() {
 
   let launched = null;
 
-  // Try standard launch first
   try {
     launched = await puppeteer.launch({
       headless: !state.headful,
@@ -214,24 +231,34 @@ async function scanAndVote() {
     if (!page || page.isClosed()) {
       page = await activeBrowser.newPage();
       await page.setViewport({ width: 1280, height: 800 });
-      await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+      
+      // Inject anti-bot evasion properties so Poll Everywhere WebSockets connect properly
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        window.chrome = window.chrome || { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+      });
+
       lastNavigatedUrl = null;
     }
 
     const currentUrl = page.url();
     const formattedTarget = formatUrl(state.targetUrl);
 
-    // Only perform full page navigation if target changed or initial blank
+    // Force page navigation if URL changed, initial blank, or if we missed active polls 2 times consecutively
     const needsNavigation = !currentUrl || 
                              currentUrl === 'about:blank' || 
                              lastNavigatedUrl !== formattedTarget ||
-                             (!isPollevDomain(currentUrl) && !isPollevDomain(formattedTarget));
+                             (!isPollevDomain(currentUrl) && !isPollevDomain(formattedTarget)) ||
+                             consecutiveMisses >= 2;
 
     if (needsNavigation) {
-      addLog('info', `Navigating to ${formattedTarget}...`);
+      addLog('info', `Navigating to ${formattedTarget}${consecutiveMisses >= 2 ? ' (Re-syncing page state...)' : ''}...`);
       await page.goto(formattedTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
       lastNavigatedUrl = formattedTarget;
-      await new Promise(r => setTimeout(r, 2500));
+      consecutiveMisses = 0;
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     // Auto-fill Screen / Participant Name if Poll Everywhere prompts for registration
@@ -275,7 +302,7 @@ async function scanAndVote() {
 
       if (nameFilled) {
         addLog('info', `Registered participant name on Poll Everywhere: "${state.screenName}"`);
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
 
@@ -287,49 +314,61 @@ async function scanAndVote() {
       console.error('Screenshot error:', e.message);
     }
 
-    // Enhanced DOM Inspection for Poll Everywhere options & questions
+    // Comprehensive DOM Inspection across main document & any child frames
     const pollResult = await page.evaluate(() => {
       const cleanText = (str) => str ? str.trim().replace(/\s+/g, ' ') : '';
 
-      const waitingEl = document.querySelector('[data-test-id="waiting-screen"], .component-waiting-screen, .pe-waiting-screen');
-      const bodyTextLower = (document.body.innerText || '').toLowerCase();
-      const waitingTextFound = bodyTextLower.includes('waiting for presenter') || 
-                               bodyTextLower.includes('no active poll') ||
-                               bodyTextLower.includes('presenter is offline') ||
-                               bodyTextLower.includes('when the presenter starts');
+      // Check explicit waiting screen elements
+      const waitingEl = document.querySelector('[data-test-id="waiting-screen"], .component-waiting-screen, .pe-waiting-screen, [class*="waiting-screen"]');
+      const headings = Array.from(document.querySelectorAll('h1, h2, h3, div, p'));
+      const explicitWaitingMsg = headings.find(h => {
+        const txt = (h.innerText || '').toLowerCase().trim();
+        return (txt === 'waiting for presenter...' || txt === 'waiting for presenter' || txt === 'no active poll' || txt.includes('presenter is offline')) && h.offsetWidth > 0;
+      });
 
+      // Question title selectors
       const questionEl = document.querySelector([
         '[data-test-id="question-title"]',
+        '[data-test-id*="question"]',
+        '[data-test-id*="poll-header"]',
         '.component-poll-header__title',
         '.component-response-header__title',
         '.pe-question-title',
         '[class*="question-title"]',
-        '[class*="poll-title"]',
+        '[class*="poll-header"]',
+        '[class*="response-header"]',
         '[class*="header__title"]',
+        '.component-response-header',
         '[role="heading"]',
         'h1',
         'h2'
       ].join(','));
 
-      const questionText = questionEl ? cleanText(questionEl.innerText) : (waitingTextFound ? 'Waiting for presenter to start...' : 'Poll Everywhere Page');
+      const questionText = questionEl ? cleanText(questionEl.innerText) : (waitingEl || explicitWaitingMsg ? 'Waiting for presenter...' : 'Poll Everywhere Page');
 
+      // Multiple choice option selectors
       const optionSelectors = [
-        '.component-response-option',
         '[data-test-id*="response-option"]',
+        '[data-test-id*="option"]',
+        '.component-response-option',
         'button[class*="response-option"]',
         'button[class*="component-response-option"]',
         '.pe-response-option__button',
         '.component-response-multiple-choice__option',
+        '.component-response-multiple-choice__option-button',
         'button[data-test-id*="option"]',
         '[role="button"][class*="option"]',
-        '[class*="multiple-choice__option"]',
+        '[class*="multiple-choice"] button',
+        '[role="radiogroup"] button',
+        '[role="radiogroup"] [role="radio"]',
+        '[role="listbox"] [role="option"]',
         '.component-response-clickable-image__target',
         '[data-test-id*="clickable-image"]'
       ];
 
       let rawOptions = [];
       for (const sel of optionSelectors) {
-        const found = Array.from(document.querySelectorAll(sel));
+        const found = Array.from(document.querySelectorAll(sel)).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
         if (found.length > 0) {
           rawOptions = found;
           break;
@@ -337,16 +376,25 @@ async function scanAndVote() {
       }
 
       if (rawOptions.length === 0) {
-        const responseContainer = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main');
+        const responseContainer = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main, #app');
         if (responseContainer) {
           rawOptions = Array.from(responseContainer.querySelectorAll('button, [role="button"]')).filter(btn => {
             const txt = (btn.innerText || '').trim();
-            return txt.length > 0 && !txt.toLowerCase().includes('submit') && !txt.toLowerCase().includes('clear') && !txt.toLowerCase().includes('introduce');
+            const lower = txt.toLowerCase();
+            return txt.length > 0 && 
+                   btn.offsetWidth > 0 &&
+                   !lower.includes('submit') && 
+                   !lower.includes('clear') && 
+                   !lower.includes('introduce') &&
+                   !lower.includes('continue');
           });
         }
       }
 
-      const options = rawOptions.map((el, index) => {
+      // Check open-ended / text input poll types
+      const freeTextInput = document.querySelector('textarea, input[type="text"][data-test-id*="response"], textarea.component-response-free-text__input');
+
+      let options = rawOptions.map((el, index) => {
         const isSelected = el.classList.contains('component-response-option--selected') || 
                            el.getAttribute('aria-pressed') === 'true' ||
                            el.getAttribute('aria-selected') === 'true' ||
@@ -360,11 +408,24 @@ async function scanAndVote() {
         };
       });
 
+      if (options.length === 0 && freeTextInput && freeTextInput.offsetWidth > 0) {
+        options = [{
+          index: 0,
+          text: 'Open-ended Text Response Input',
+          isSelected: false,
+          className: freeTextInput.className,
+          isFreeText: true
+        }];
+      }
+
       const selectedOptionIndex = options.findIndex(o => o.isSelected);
 
+      const hasActivePoll = options.length > 0 || (questionEl && questionText !== 'Waiting for presenter...' && questionText !== 'Poll Everywhere Page');
+
       return {
-        isWaiting: waitingEl !== null || (options.length === 0 && waitingTextFound),
+        isWaiting: (waitingEl !== null || explicitWaitingMsg !== null) && options.length === 0,
         hasOptions: options.length > 0,
+        hasActivePoll,
         question: questionText,
         options,
         selectedOptionIndex: selectedOptionIndex >= 0 ? selectedOptionIndex : null,
@@ -372,7 +433,8 @@ async function scanAndVote() {
       };
     });
 
-    if (pollResult.hasOptions) {
+    if (pollResult.hasOptions || pollResult.hasActivePoll) {
+      consecutiveMisses = 0;
       state.stats.pollsDetected++;
       state.currentPoll = {
         active: true,
@@ -386,7 +448,7 @@ async function scanAndVote() {
 
       if (pollResult.selectedOptionIndex !== null) {
         addLog('info', `Option already selected: "${pollResult.selectedOptionText}"`);
-      } else if (state.isAutoVoting) {
+      } else if (state.isAutoVoting && pollResult.options.length > 0) {
         let targetIndex = 0;
         let aiReason = null;
 
@@ -416,24 +478,25 @@ async function scanAndVote() {
 
         const clickedSuccess = await page.evaluate((idx) => {
           const optionSelectors = [
-            '.component-response-option',
             '[data-test-id*="response-option"]',
+            '[data-test-id*="option"]',
+            '.component-response-option',
             'button[class*="response-option"]',
             'button[class*="component-response-option"]',
             '.pe-response-option__button',
             '.component-response-multiple-choice__option',
             'button[data-test-id*="option"]',
             '[role="button"][class*="option"]',
-            '[class*="multiple-choice__option"]'
+            '[class*="multiple-choice"] button'
           ];
           let els = [];
           for (const sel of optionSelectors) {
-            const found = Array.from(document.querySelectorAll(sel));
+            const found = Array.from(document.querySelectorAll(sel)).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
             if (found.length > 0) { els = found; break; }
           }
           if (els.length === 0) {
-            const main = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main');
-            if (main) els = Array.from(main.querySelectorAll('button, [role="button"]'));
+            const main = document.querySelector('.component-response, .pe-response-body, [data-test-id*="response"], main, #app');
+            if (main) els = Array.from(main.querySelectorAll('button, [role="button"]')).filter(b => b.offsetWidth > 0);
           }
 
           if (els[idx]) {
@@ -476,6 +539,7 @@ async function scanAndVote() {
         }
       }
     } else {
+      consecutiveMisses++;
       state.currentPoll = {
         active: false,
         question: pollResult.question || 'Waiting for presenter...',
@@ -639,10 +703,11 @@ app.get('/api/stream', (req, res) => {
 const distPath = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
-  app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(distPath, 'index.html'));
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
+      return res.sendFile(path.join(distPath, 'index.html'));
     }
+    next();
   });
 }
 
